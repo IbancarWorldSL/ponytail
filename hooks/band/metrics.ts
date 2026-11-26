@@ -31,6 +31,8 @@ const DEFS: [RegExp, RegExp[]][] = [
     /^[ \t]*export[ \t]+(?:default[ \t]+)?(?:async[ \t]+)?(?:function\*?|class|const|let|var)[ \t]+([A-Za-z_$][\w$]*)/gm,
     /^[ \t]*(?:async[ \t]+)?function\*?[ \t]+([A-Za-z_$][\w$]*)/gm,
     /^[ \t]+(?:async[ \t]+)?(?!(?:if|for|while|switch|catch|function|return|else)\b)([A-Za-z_$][\w$]*)[ \t]*\([^)\n]*\)[ \t]*\{/gm,
+    // Vue 3 <script setup>: `const save = async (x) => {` is how a component defines its functions.
+    /^[ \t]*const[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*(?:async[ \t]*)?(?:\([^)\n]*\)|[A-Za-z_$][\w$]*)[ \t]*(?::[^=\n]+)?=>/gm,
   ]],
 ]
 
@@ -95,7 +97,7 @@ export function inProject(file: string, root: string): boolean {
   return f === r || f.startsWith(`${r}/`)
 }
 
-const TEST_CMD = /\b(npm (run )?test|pnpm (run )?test|yarn test|bun test|npx (jest|vitest)|jest|vitest|pytest|python3? -m pytest|go test|cargo test|mvn test|gradle test|rspec|phpunit|artisan test|dotnet test|node --test|deno test|make test)\b/
+const TEST_CMD = /\b(npm (run )?test|pnpm (run )?test|yarn test|bun test|npx (jest|vitest)|jest|vitest|pytest|python3? -m pytest|go test|cargo test|mvn test|gradle test|rspec|phpunit|pest|artisan test|dotnet test|node --test|deno test|make test)\b/
 
 export const isTestCommand = (command: string) => TEST_CMD.test(command)
 

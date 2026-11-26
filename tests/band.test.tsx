@@ -205,6 +205,9 @@ describe('metrics', () => {
     expect([...known.keys()]).toEqual(['getDeudaContrato'])
     expect(callsIn('$deuda = $this->contrato->getDeudaContrato($hoy);', known, [])).toEqual(['getDeudaContrato'])
     expect(isTestCommand('php artisan test --filter=Collection')).toBe(true)
+    expect(isTestCommand('./vendor/bin/pest --parallel')).toBe(true)
+    const setup = '<script setup lang="ts">\nconst cuota = ref(0)\nconst guardar = async (id: number) => {}\nconst limpiar = () => cuota.value = 0\nconst total = computed(() => cuota.value)\n</script>'
+    expect(defsIn('resources/js/Pago.vue', setup)).toEqual(['guardar', 'limpiar'])
   })
 
   test('counts calls of existing helpers, never new ones, test files or generic names', () => {

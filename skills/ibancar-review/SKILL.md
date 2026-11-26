@@ -50,6 +50,24 @@ origin/develop"). Además, con lo que dice conciliacion-dev:
 - Dinero (cuotas, intereses, TAE, cancelaciones): redondeos, fechas, zonas
   horarias. Márcalo para revisión humana aunque parezca bien.
 
+Y lo propio del stack (lee `composer.json` y `package.json` para saber qué
+versiones hay; el CRM va en Laravel 12 / PHP 8.5 y su frontend en Vue 2 con
+Vuex y laravel-mix, camino de Vue 3):
+
+- **Eloquent:** consultas dentro de bucles (N+1) sin `with()`; escrituras
+  de dinero o de varias tablas fuera de `DB::transaction`; campos nuevos
+  asignables en masa sin revisar `$fillable` / `$guarded`.
+- **Validación:** la regla está en el servidor (FormRequest o `validate()`),
+  no solo en el componente Vue.
+- **Migraciones:** `down()` que deshaga `up()`; columnas nuevas con valor
+  por defecto o `nullable` si la tabla ya tiene datos.
+- **Colas, crons y observers:** si se ejecutan dos veces, ¿duplican? Si
+  fallan, ¿se reintentan sin repetir efectos?
+- **Vue:** código nuevo sin APIs que Vue 3 elimina (`filters`,
+  `$on` / `$off` / `$once`, `Vue.set`, `$listeners`, `.sync`), para que no
+  añada trabajo a la migración. Si ya es Vue 3: `<script setup>`, Pinia
+  frente a Vuex y que no se pierda la reactividad al desestructurar props.
+
 Cada hallazgo de negocio cita la fuente: `fichero:línea` del código y el
 apartado de conciliacion-dev en que se apoya. Si algo no consta en la
 documentación, di "no consta en la documentación"; no lo supongas.
