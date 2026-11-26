@@ -111,6 +111,9 @@ async function readBranch($: EngineInterface): Promise<string> {
   return git?.exitCode === 0 ? git.stdout.trim() : ''
 }
 
+// One breakdown at a time: a second press while the model answers would copy twice.
+let breakingDown = false
+
 // The PR in plain words, from its commits and diff against the first base that exists, straight to the clipboard: no turn.
 async function breakdown($: EngineInterface, surface: Parameters<EngineInterface['ui']['copy']>[0]['surface']) {
   const git = async (...args: string[]) => {
@@ -414,7 +417,16 @@ export const register: Register = (on, options) => {
     const review = () => run($, 'ponytail:ibancar-review')
     const audit = () => run($, 'ponytail:ibancar-ticket')
     const board = () => openBoard($).catch(() => $.ui.toast('ponytail band: no se pudo abrir el tablero'))
-    const desglose = () => breakdown($, e.surface).catch(() => $.ui.toast('Desglose: algo falló al generarlo'))
+    // A press has a 10 s budget and the model takes longer: run it on a timer, outside the press.
+    const desglose = () => {
+      if (breakingDown) return $.ui.toast('Desglose: ya se está generando')
+      breakingDown = true
+      $.clock.after(0, () => {
+        void breakdown($, e.surface)
+          .catch(() => $.ui.toast('Desglose: algo falló al generarlo'))
+          .finally(() => (breakingDown = false))
+      })
+    }
 
     const { Box, Text, Button, Link } = $.ui.resolve(e)
     // bodyColumns counts terminal cells; a graphical surface draws Buttons wider than their cells, so a row sized to it wraps there.

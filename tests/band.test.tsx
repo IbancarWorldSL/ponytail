@@ -559,8 +559,8 @@ test('the band warns when the work is on develop', async ($, on) => {
   await ui.unmount()
 })
 
-test('desglose sums the PR up with the model and copies it, with no turn', async ($, on) => {
-  mock.clock(on)
+test('desglose sums the PR up with the model and copies it, outside the press and with no turn', async ($, on) => {
+  const clock = mock.clock(on)
   mock.store(on)
   const runs: string[] = []
   on('process.run', ($, e) => {
@@ -597,6 +597,9 @@ test('desglose sums the PR up with the model and copies it, with no turn', async
   })
   const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
   await ui.press({ key: 'breakdown' })
+  // The press returns at once (its budget is 10 s); the work runs on a timer.
+  expect(prompts).toEqual([])
+  await clock.settle()
   // No develop in the clone: the next base that exists.
   expect(runs).toContain('git diff origin/release-(WIP)...HEAD')
   expect(prompts[0]).toContain('Ticket: TI-4658')
