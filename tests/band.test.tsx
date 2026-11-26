@@ -195,6 +195,18 @@ describe('metrics', () => {
     expect(defsIn('README.md', 'def nope():')).toEqual([])
   })
 
+  test('finds PHP and Vue definitions, as the CRM writes them', () => {
+    const php = 'class ContratoAcuerdo extends BaseModel {\n\tpublic function producto()\n\t{\n\t\treturn 1;\n\t}\n\tprotected static function calcularDemora($c) {}\n\tprivate function &ref() {}\n}\ntrait Auditable {}'
+    expect(defsIn('app/ContratoAcuerdo.php', php)).toEqual(['producto', 'calcularDemora', 'ref', 'ContratoAcuerdo', 'Auditable'])
+    const vue = '<script>\nexport default {\n  methods: {\n    calcularCuota(importe) {\n      if (importe) {\n        return importe\n      }\n    },\n  },\n}\nexport function formatoEuros(v) {}\n</script>'
+    expect(defsIn('resources/js/Cuotas.vue', vue)).toEqual(['formatoEuros', 'calcularCuota'])
+    // git grep at session start sees PHP methods, so a later call to one counts as reuse.
+    const known = parseDefs('app/Contrato.php:12:    public function getDeudaContrato($fecha)\ntests/Feature/XTest.php:3:    public function helper()')
+    expect([...known.keys()]).toEqual(['getDeudaContrato'])
+    expect(callsIn('$deuda = $this->contrato->getDeudaContrato($hoy);', known, [])).toEqual(['getDeudaContrato'])
+    expect(isTestCommand('php artisan test --filter=Collection')).toBe(true)
+  })
+
   test('counts calls of existing helpers, never new ones, test files or generic names', () => {
     const known = parseDefs('utils/money.py:4:def to_cents(v):\nutils/io.py:1:def load(p):\ntests/test_x.py:1:def helper():')
     expect([...known.keys()]).toEqual(['to_cents', 'load'])

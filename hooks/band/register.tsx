@@ -206,7 +206,10 @@ async function openBoard($: EngineInterface) {
 
 // Sets the band up for a session (level, project, task row, cost baseline); returns the definitions that exist now.
 async function start($: EngineInterface): Promise<Map<string, string>> {
-  const grep = await $.process.run(['git', 'grep', '--untracked', '-nE', GREP_DEFS]).catch(() => undefined)
+  // Leave out what never counts as reuse (SKIP_DIR) so a big repo stays under process.run's 4 MiB of output.
+  // shortcut: past 4 MiB the rest is dropped; git lists paths in order, so app code before resources/ and routes/ is kept.
+  const skip = ['node_modules', 'vendor', 'dist', 'build', 'migrations', 'tests', 'test', '__tests__', 'spec', 'fixtures'].map(d => `:(exclude,glob)**/${d}/**`)
+  const grep = await $.process.run(['git', 'grep', '--untracked', '-nE', GREP_DEFS, '--', '.', ...skip]).catch(() => undefined)
   const level = await readLevel($)
   const details = (await $.store.get('details')) === true
   const repo = await $.session.repo().catch(() => null)

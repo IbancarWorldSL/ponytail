@@ -20,10 +20,22 @@ const DEFS: [RegExp, RegExp[]][] = [
   [/\.go$/, [/^func\s+(?:\([^)]*\)\s*)?([A-Za-z]\w*)/gm]],
   [/\.rs$/, [/^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/gm]],
   [/\.rb$/, [/^\s*def\s+(?:self\.)?([A-Za-z]\w*[?!]?)/gm]],
+  // PHP (Laravel): methods sit indented inside their class, with visibility in front.
+  [/\.php$/, [
+    /^[ \t]*(?:(?:abstract|final|public|protected|private|static)[ \t]+)*function[ \t]+&?([A-Za-z_]\w*)/gm,
+    /^[ \t]*(?:(?:abstract|final|readonly)[ \t]+)*(?:class|trait|interface|enum)[ \t]+([A-Za-z_]\w*)/gm,
+  ]],
+  // Vue single-file components: script setup functions, exported helpers and Options API methods.
+  // shortcut: a method is any indented `name(args) {` line, so an odd call ending in `{` counts too; parse the <script> block if that misleads.
+  [/\.vue$/, [
+    /^[ \t]*export[ \t]+(?:default[ \t]+)?(?:async[ \t]+)?(?:function\*?|class|const|let|var)[ \t]+([A-Za-z_$][\w$]*)/gm,
+    /^[ \t]*(?:async[ \t]+)?function\*?[ \t]+([A-Za-z_$][\w$]*)/gm,
+    /^[ \t]+(?:async[ \t]+)?(?!(?:if|for|while|switch|catch|function|return|else)\b)([A-Za-z_$][\w$]*)[ \t]*\([^)\n]*\)[ \t]*\{/gm,
+  ]],
 ]
 
 // Lines worth a closer look; the per-language regexes above decide.
-export const GREP_DEFS = '^[[:space:]]*(export|async|def|class|function|func|pub|fn)[[:space:]]'
+export const GREP_DEFS = '^[[:space:]]*(export|async|def|class|function|func|pub|fn|public|protected|private|static|abstract|final|trait|interface|enum)[[:space:]]'
 
 // Names too generic to say anything about reuse.
 const GENERIC = new Set(['main', 'init', 'run', 'get', 'set', 'test', 'setup', 'open', 'close', 'read', 'write', 'start', 'stop', 'load', 'save', 'update', 'create', 'delete', 'handle', 'render', 'index', 'new', 'call', 'apply'])
@@ -83,7 +95,7 @@ export function inProject(file: string, root: string): boolean {
   return f === r || f.startsWith(`${r}/`)
 }
 
-const TEST_CMD = /\b(npm (run )?test|pnpm (run )?test|yarn test|bun test|npx (jest|vitest)|jest|vitest|pytest|python3? -m pytest|go test|cargo test|mvn test|gradle test|rspec|phpunit|dotnet test|node --test|deno test|make test)\b/
+const TEST_CMD = /\b(npm (run )?test|pnpm (run )?test|yarn test|bun test|npx (jest|vitest)|jest|vitest|pytest|python3? -m pytest|go test|cargo test|mvn test|gradle test|rspec|phpunit|artisan test|dotnet test|node --test|deno test|make test)\b/
 
 export const isTestCommand = (command: string) => TEST_CMD.test(command)
 
