@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { boardHtml, parseCsv, tasksFrom } from '../hooks/band/board'
 import type { Band } from '../hooks/band/types'
+import { DIFF_LIMIT, breakdownPrompt, flowWarning, ticketFrom, ticketUrl } from '../hooks/band/ibancar'
 import {
   NO_TOKENS,
   addTokens,
@@ -246,7 +247,7 @@ test('the band switches between compact and details on terminal and desktop', as
     expect(await ui.find({ key: 'level-ultra' })).toBeDefined()
     expect(await ui.find({ key: 'board' })).toBeDefined()
     if (surface === 'desktop') expect(await ui.find({ type: 'Svg' })).toBeDefined()
-    else expect(await ui.find({ type: 'Text', text: /cost/ })).toBeDefined()
+    else expect(await ui.find({ type: 'Text', text: /tokens/ })).toBeDefined()
 
     await ui.press({ key: 'details' })
     expect(await ui.find({ key: 'level' })).toBeDefined()
@@ -274,8 +275,8 @@ test('the details view has its line without empty rows, and off the terminal its
     await ui.press({ key: 'details' })
     expect(await ui.find({ type: 'Text', text: /─/ })).toBeDefined()
     expect((await ui.find({ type: 'Box' }))?.props.gap).toBe(0)
-    const cost = (await ui.find({ key: 'cost' }))?.props
-    expect(surface === 'terminal' ? cost?.width : cost?.flexGrow).toBe(surface === 'terminal' ? 31 : 1)
+    const tokens = (await ui.find({ key: 'tokens' }))?.props
+    expect(surface === 'terminal' ? tokens?.width : tokens?.flexGrow).toBe(surface === 'terminal' ? 31 : 1)
     // The view is stored, so the next surface would start in details: switch back.
     await ui.press({ key: 'details' })
     await ui.unmount()
@@ -477,26 +478,132 @@ test('review and audit run the same commands a person types', async ($, on) => {
   sent.length = 0
   await ui.press({ key: 'review' })
   await ui.press({ key: 'audit' })
-  expect(sent).toEqual(['/ponytail:ponytail-review', '/ponytail:ponytail-audit'])
+  await ui.press({ key: 'pr' })
+  expect(sent).toEqual(['/ponytail:ibancar-review', '/ponytail:ibancar-ticket', '/ponytail:ibancar-pr'])
+  // Compact has the same buttons, and no copy.
+  await ui.press({ key: 'details' })
+  for (const key of ['breakdown', 'review', 'audit', 'pr', 'board']) expect(await ui.find({ key })).toBeDefined()
+  expect(await ui.find({ key: 'copy' })).toBeUndefined()
   await ui.unmount()
 })
 
-test('copy hands the task to the clipboard as Markdown', async ($, on) => {
+describe('ibancar', () => {
+  test('the ticket comes from the branch name, upper-cased', () => {
+    expect(ticketFrom('feat/TI-4658-acuerdos')).toBe('TI-4658')
+    expect(ticketFrom('feat/ti-4658_acuerdos')).toBe('TI-4658')
+    expect(ticketFrom('TI-4640')).toBe('TI-4640')
+    expect(ticketFrom('hotfix/CAR-12')).toBe('CAR-12')
+    expect(ticketFrom('aeh/cool-hypatia-ojysvf')).toBeUndefined()
+    expect(ticketFrom('release-(WIP)')).toBeUndefined()
+    expect(ticketUrl('TI-1', 'https://x.atlassian.net/')).toBe('https://x.atlassian.net/browse/TI-1')
+  })
+
+  test('the breakdown prompt names the ticket and cuts a huge diff', () => {
+    const p = breakdownPrompt({ branch: 'b', base: 'origin/develop', log: 'x', stat: 'y', diff: 'z'.repeat(DIFF_LIMIT + 10) })
+    expect(p).toContain('Ticket: ninguno')
+    expect(p).toContain('recortado="sí"')
+    expect(p.length).toBeLessThan(DIFF_LIMIT + 2000)
+  })
+
+  test('the flow warns on protected branches and on work without a ticket', () => {
+    expect(flowWarning('develop')).toContain('release-(WIP)')
+    expect(flowWarning('release-(WIP)')).toContain('estás en release-(WIP)')
+    expect(flowWarning('feat/varios-arreglos')).toBeUndefined()
+    expect(flowWarning('feat/TI-4658-acuerdos')).toBeUndefined()
+    expect(flowWarning('')).toBeUndefined()
+    expect(flowWarning('HEAD')).toBeUndefined()
+  })
+})
+
+const onBranch = (on: Parameters<Parameters<typeof test>[1]>[1], branch: string) =>
+  on('process.run', ($, e) =>
+    ({ value: e.argv[0] === 'git' && e.argv[1] === 'rev-parse' ? { exitCode: 0, stdout: `${branch}\n`, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }) as never)
+
+test('the band links the branch ticket to Jira and shows no cost', async ($, on) => {
   mock.clock(on)
   mock.store(on)
+  onBranch(on, 'feat/TI-4658-acuerdos')
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('fs.read', () => ({ deny: 'missing' }) as never)
+  on('session.repo', () => ({ value: { root: '/repo/crm' } }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('session.usage', () => ({ value: { startedAt: 0 } }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/repo/crm', surface: null } as never)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'ponytail', surface, ...BAND })
+    const link = await ui.find({ type: 'Link' })
+    expect(link?.props.href).toBe('https://ibancar.atlassian.net/browse/TI-4658')
+    expect(link?.text).toBe('TI-4658')
+    expect(await ui.find({ type: 'Text', text: /⚠/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: /\$/ })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('the band warns when the work is on develop', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  onBranch(on, 'develop')
+  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('fs.read', () => ({ deny: 'missing' }) as never)
+  on('session.repo', () => ({ value: { root: '/repo/crm' } }) as never)
+  on('session.id', () => ({ value: 's1' }))
+  on('session.usage', () => ({ value: { startedAt: 0 } }) as never)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/repo/crm', surface: null } as never)
+  const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
+  expect(await ui.find({ type: 'Link' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /⚠ sin ticket asociado/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /⚠ estás en develop/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('desglose sums the PR up with the model and copies it, with no turn', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  const runs: string[] = []
+  on('process.run', ($, e) => {
+    const args = e.argv.join(' ')
+    runs.push(args)
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } }) as never
+    if (args === 'git rev-parse --verify --quiet origin/develop') return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
+    if (args.startsWith('git rev-parse --verify')) return out('abc\n')
+    if (args === 'git rev-parse --abbrev-ref HEAD') return out('feat/TI-4658-acuerdos\n')
+    if (args === 'git diff origin/release-(WIP)...HEAD') return out('+ producto acuerdo\n')
+    if (args.startsWith('git log')) return out('TI-4658 Producto de acuerdos\n')
+    if (args.startsWith('git diff --stat')) return out(' app/ContratoAcuerdo.php | 2 +-\n')
+    return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
+  })
+  const prompts: string[] = []
+  on('model.complete', ($, e) => {
+    prompts.push(e.prompt)
+    return { value: { isAnswered: true, text: '## TI-4658: el cron usa el producto correcto\n', usage: {} } } as never
+  })
   const copied: string[] = []
   on('ui.copy', ($, e) => {
     copied.push(e.text)
     return { value: { isCopied: true as const } }
   })
-  on('ui.toast', () => ({ value: undefined }))
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(String(e.text))
+    return { value: undefined }
+  })
+  const sent: string[] = []
+  on('command.run', ($, e) => {
+    sent.push(e.command)
+    return { text: '' }
+  })
   const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
-  await ui.press({ key: 'details' })
-  expect(await ui.find({ key: 'task' })).toBeUndefined()
-  await ui.press({ key: 'copy' })
-  expect(copied.length).toBe(1)
-  expect(copied[0]).toContain('## Untitled session')
-  expect(copied[0]).toContain('| Turns | 0 |')
+  await ui.press({ key: 'breakdown' })
+  // No develop in the clone: the next base that exists.
+  expect(runs).toContain('git diff origin/release-(WIP)...HEAD')
+  expect(prompts[0]).toContain('Ticket: TI-4658')
+  expect(prompts[0]).toContain('+ producto acuerdo')
+  expect(copied).toEqual(['## TI-4658: el cron usa el producto correcto'])
+  expect(toasts.at(-1)).toBe('Desglose de la PR copiado')
+  expect(sent).toEqual([])
   await ui.unmount()
 })
 
@@ -515,6 +622,6 @@ test('a test run shows its count, and an edit in the project after it marks the 
   expect(await ui.find({ type: 'Text', text: /✓ 14 tests/ })).toBeDefined()
 
   await $.tool.call({ tool: 'Edit', file_path: '/repo/cart.py', old_string: 'a = 1', new_string: 'a = 2', replace_all: false } as never)
-  expect(await ui.find({ type: 'Text', text: /no test since change/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /sin test desde el cambio/ })).toBeDefined()
   await ui.unmount()
 })

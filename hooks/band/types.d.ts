@@ -25,6 +25,7 @@ export type Band = {
   openCallers: string[]
   tests: Tests
   details: boolean
+  branch: string
 }
 
 declare module 'claude-code' {
