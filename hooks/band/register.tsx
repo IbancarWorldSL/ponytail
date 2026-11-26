@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { boardHtml, tasksFrom } from './board'
-import { BASES, BREAKDOWN_SYSTEM, JIRA_URL, breakdownPrompt, flowWarning, ticketFrom, ticketUrl } from './ibancar'
+import { JIRA_URL, flowWarning, ticketFrom, ticketUrl } from './ibancar'
 import type { Band } from './types'
 import type { Col } from './metrics'
 import {
@@ -109,41 +109,6 @@ async function readLevel($: EngineInterface): Promise<string> {
 async function readBranch($: EngineInterface): Promise<string> {
   const git = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).catch(() => undefined)
   return git?.exitCode === 0 ? git.stdout.trim() : ''
-}
-
-// One breakdown at a time: a second press while the model answers would copy twice.
-let breakingDown = false
-
-// The PR in plain words, from its commits and diff against the first base that exists, straight to the clipboard: no turn.
-async function breakdown($: EngineInterface, surface: Parameters<EngineInterface['ui']['copy']>[0]['surface']) {
-  const git = async (...args: string[]) => {
-    const r = await $.process.run(['git', ...args]).catch(() => undefined)
-    return r?.exitCode === 0 ? r.stdout : undefined
-  }
-  let base: string | undefined
-  for (const b of BASES) if (base === undefined && (await git('rev-parse', '--verify', '--quiet', b)) !== undefined) base = b
-  if (base === undefined) return $.ui.toast('Desglose: no encuentro origin/develop ni otra rama base')
-  const diff = (await git('diff', `${base}...HEAD`)) ?? ''
-  if (diff.trim() === '') return $.ui.toast(`Desglose: no hay cambios respecto a ${base}`)
-  const branch = await readBranch($)
-  $.ui.toast('Generando desglose…')
-  const reply = await $.model.complete({
-    model: 'sonnet',
-    system: BREAKDOWN_SYSTEM,
-    prompt: breakdownPrompt({
-      branch,
-      ticket: ticketFrom(branch),
-      base,
-      log: (await git('log', '--format=%s', `${base}..HEAD`)) ?? '',
-      stat: (await git('diff', '--stat', `${base}...HEAD`)) ?? '',
-      diff,
-    }),
-    maxTokens: 2000,
-    timeoutMs: 120_000,
-  })
-  if (!reply.isAnswered) return $.ui.toast(`Desglose: el modelo no respondió (${reply.reason})`)
-  const done = await $.ui.copy({ text: reply.text.trim(), surface })
-  $.ui.toast(done.isCopied ? 'Desglose de la PR copiado' : `Desglose: no se pudo copiar (${done.reason})`)
 }
 
 // The same commands a person types, so ponytail's own skills and hooks stay the only logic.
@@ -417,16 +382,7 @@ export const register: Register = (on, options) => {
     const review = () => run($, 'ponytail:ibancar-review')
     const audit = () => run($, 'ponytail:ibancar-ticket')
     const board = () => openBoard($).catch(() => $.ui.toast('ponytail band: no se pudo abrir el tablero'))
-    // A press has a 10 s budget and the model takes longer: run it on a timer, outside the press.
-    const desglose = () => {
-      if (breakingDown) return $.ui.toast('Desglose: ya se está generando')
-      breakingDown = true
-      $.clock.after(0, () => {
-        void breakdown($, e.surface)
-          .catch(() => $.ui.toast('Desglose: algo falló al generarlo'))
-          .finally(() => (breakingDown = false))
-      })
-    }
+    const desglose = () => run($, 'ponytail:ibancar-desglose')
 
     const { Box, Text, Button, Link } = $.ui.resolve(e)
     // bodyColumns counts terminal cells; a graphical surface draws Buttons wider than their cells, so a row sized to it wraps there.
