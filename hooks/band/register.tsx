@@ -405,7 +405,13 @@ export const register: Register = (on, options) => {
     const jira = typeof options.jiraUrl === 'string' && options.jiraUrl.trim() !== '' ? options.jiraUrl.trim() : JIRA_URL
     // Where the cost was, one slot: the ticket the branch names, else a protected branch, else plainly no ticket.
     const ticketChip =
-      ticket !== undefined ? <Link href={ticketUrl(ticket, jira)} label={ticket} /> : <Text color="warning">⚠ {warning ?? 'sin ticket asociado'}</Text>
+      ticket !== undefined ? (
+        <Link href={ticketUrl(ticket, jira)} label={ticket} />
+      ) : (
+        <Text color="warning" wrap="truncate-end">
+          ⚠ {warning ?? 'sin ticket asociado'}
+        </Text>
+      )
     // The original band's slots, same count: a longer row does not fit the panel.
     const buttons = [
       <Button key="breakdown" plain label="Desglose" onPress={desglose} />,
@@ -421,12 +427,13 @@ export const register: Register = (on, options) => {
           <Button key="level" plain onPress={toggle}>
             <Text color={b.level === 'off' ? 'inactive' : 'suggestion'}>●</Text> {b.level}
           </Button>
+          {/* One row: a graphical surface breaks a long Text into lines, which pushed the row out of the band. */}
           {ticketChip}
-          <Text dimColor>{elapsed(b.busyMs)}</Text>
-          {reuse !== undefined && <Text>{reuse}% reutilizado</Text>}
-          {hasOpen && <Text color="warning">⚠ {b.openCallers.length} llamadas abiertas</Text>}
+          <Text dimColor wrap="truncate-end">{elapsed(b.busyMs)}</Text>
+          {reuse !== undefined && <Text wrap="truncate-end">{reuse}% reutilizado</Text>}
+          {hasOpen && <Text color="warning" wrap="truncate-end">⚠ {b.openCallers.length} llamadas abiertas</Text>}
           {testsText !== '' && (
-            <Text color={testsColor} dimColor={b.tests.state === 'stale'}>
+            <Text color={testsColor} dimColor={b.tests.state === 'stale'} wrap="truncate-end">
               {testsText}
             </Text>
           )}
