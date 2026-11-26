@@ -35,6 +35,14 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # The band (hooks/band) is tested against Claude Code's own engine; npm test does not reach it.
+      # Pinned: the engine's test kit changes with it. No credentials needed.
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code@2.1.332
+
+      - name: Run band tests
+        run: claude plugin test .
+
       - name: Run benchmark selftest
         run: python3 benchmarks/agentic/run.py --selftest
 

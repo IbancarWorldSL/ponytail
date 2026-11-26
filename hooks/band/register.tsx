@@ -422,7 +422,7 @@ export const register: Register = (on, options) => {
 
     if (!b.details) {
       return stack(
-        <Box flexDirection="row" alignItems="center" gap={2} width={width}>
+        <Box key="band" flexDirection="row" alignItems="center" gap={2} width={width}>
           {/* A click opens the four levels: one click, one turn, no stops on levels nobody wanted. */}
           <Button key="level" plain onPress={toggle}>
             <Text color={b.level === 'off' ? 'inactive' : 'suggestion'}>●</Text> {b.level}
@@ -497,7 +497,7 @@ export const register: Register = (on, options) => {
 
     return stack(
       // The desktop's SVG draws its own line at the top, which would touch the buttons without the gap.
-      <Box flexDirection="column" width={width} gap={e.surface === 'desktop' ? 1 : 0}>
+      <Box key="band" flexDirection="column" width={width} gap={e.surface === 'desktop' ? 1 : 0}>
         <Box flexDirection="row" alignItems="center" gap={1}>
           {LEVELS.map(level => (
             <Button
