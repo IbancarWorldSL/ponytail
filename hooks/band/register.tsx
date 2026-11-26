@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { boardHtml, tasksFrom } from './board'
-import { BASES, BREAKDOWN_SYSTEM, JIRA_URL, breakdownPrompt, flowWarning, ticketFrom, ticketUrl } from './ibancar'
+import { JIRA_URL, flowWarning, ticketFrom, ticketUrl } from './ibancar'
 import type { Band } from './types'
 import type { Col } from './metrics'
 import {
@@ -109,38 +109,6 @@ async function readLevel($: EngineInterface): Promise<string> {
 async function readBranch($: EngineInterface): Promise<string> {
   const git = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).catch(() => undefined)
   return git?.exitCode === 0 ? git.stdout.trim() : ''
-}
-
-// The PR in plain words, from its commits and diff against the first base that exists, straight to the clipboard: no turn.
-async function breakdown($: EngineInterface, surface: Parameters<EngineInterface['ui']['copy']>[0]['surface']) {
-  const git = async (...args: string[]) => {
-    const r = await $.process.run(['git', ...args]).catch(() => undefined)
-    return r?.exitCode === 0 ? r.stdout : undefined
-  }
-  let base: string | undefined
-  for (const b of BASES) if (base === undefined && (await git('rev-parse', '--verify', '--quiet', b)) !== undefined) base = b
-  if (base === undefined) return $.ui.toast('Desglose: no encuentro origin/develop ni otra rama base')
-  const diff = (await git('diff', `${base}...HEAD`)) ?? ''
-  if (diff.trim() === '') return $.ui.toast(`Desglose: no hay cambios respecto a ${base}`)
-  const branch = await readBranch($)
-  $.ui.toast('Generando desglose…')
-  const reply = await $.model.complete({
-    model: 'sonnet',
-    system: BREAKDOWN_SYSTEM,
-    prompt: breakdownPrompt({
-      branch,
-      ticket: ticketFrom(branch),
-      base,
-      log: (await git('log', '--format=%s', `${base}..HEAD`)) ?? '',
-      stat: (await git('diff', '--stat', `${base}...HEAD`)) ?? '',
-      diff,
-    }),
-    maxTokens: 2000,
-    timeoutMs: 120_000,
-  })
-  if (!reply.isAnswered) return $.ui.toast(`Desglose: el modelo no respondió (${reply.reason})`)
-  const done = await $.ui.copy({ text: reply.text.trim(), surface })
-  $.ui.toast(done.isCopied ? 'Desglose de la PR copiado' : `Desglose: no se pudo copiar (${done.reason})`)
 }
 
 // The same commands a person types, so ponytail's own skills and hooks stay the only logic.
@@ -413,9 +381,8 @@ export const register: Register = (on, options) => {
     }
     const review = () => run($, 'ponytail:ibancar-review')
     const audit = () => run($, 'ponytail:ibancar-ticket')
-    const pr = () => run($, 'ponytail:ibancar-pr')
     const board = () => openBoard($).catch(() => $.ui.toast('ponytail band: no se pudo abrir el tablero'))
-    const desglose = () => breakdown($, e.surface).catch(() => $.ui.toast('Desglose: algo falló al generarlo'))
+    const desglose = () => run($, 'ponytail:ibancar-desglose')
 
     const { Box, Text, Button, Link } = $.ui.resolve(e)
     // bodyColumns counts terminal cells; a graphical surface draws Buttons wider than their cells, so a row sized to it wraps there.
@@ -436,31 +403,37 @@ export const register: Register = (on, options) => {
     const ticket = ticketFrom(b.branch)
     const warning = flowWarning(b.branch)
     const jira = typeof options.jiraUrl === 'string' && options.jiraUrl.trim() !== '' ? options.jiraUrl.trim() : JIRA_URL
-    // Where the cost was: the ticket the branch names, or plainly that there is none.
-    const ticketChip = ticket !== undefined ? <Link href={ticketUrl(ticket, jira)} label={ticket} /> : <Text color="warning">⚠ sin ticket asociado</Text>
-    const warningChip = warning !== undefined && <Text color="warning">⚠ {warning}</Text>
+    // Where the cost was, one slot: the ticket the branch names, else a protected branch, else plainly no ticket.
+    const ticketChip =
+      ticket !== undefined ? (
+        <Link href={ticketUrl(ticket, jira)} label={ticket} />
+      ) : (
+        <Text color="warning" wrap="truncate-end">
+          ⚠ {warning ?? 'sin ticket asociado'}
+        </Text>
+      )
+    // The original band's slots, same count: a longer row does not fit the panel.
     const buttons = [
       <Button key="breakdown" plain label="Desglose" onPress={desglose} />,
       <Button key="review" plain label="Revisar" onPress={review} />,
       <Button key="audit" plain label="Auditar" onPress={audit} />,
-      <Button key="pr" plain label="PR draft" onPress={pr} />,
       <Button key="board" plain label="Tablero" onPress={board} />,
     ]
 
     if (!b.details) {
       return stack(
-        <Box flexDirection="row" alignItems="center" gap={2} width={width}>
+        <Box key="band" flexDirection="row" alignItems="center" gap={2} width={width}>
           {/* A click opens the four levels: one click, one turn, no stops on levels nobody wanted. */}
           <Button key="level" plain onPress={toggle}>
             <Text color={b.level === 'off' ? 'inactive' : 'suggestion'}>●</Text> {b.level}
           </Button>
+          {/* One row: a graphical surface breaks a long Text into lines, which pushed the row out of the band. */}
           {ticketChip}
-          {warningChip}
-          <Text dimColor>{elapsed(b.busyMs)}</Text>
-          {reuse !== undefined && <Text>{reuse}% reutilizado</Text>}
-          {hasOpen && <Text color="warning">⚠ {b.openCallers.length} llamadas abiertas</Text>}
+          <Text dimColor wrap="truncate-end">{elapsed(b.busyMs)}</Text>
+          {reuse !== undefined && <Text wrap="truncate-end">{reuse}% reutilizado</Text>}
+          {hasOpen && <Text color="warning" wrap="truncate-end">⚠ {b.openCallers.length} llamadas abiertas</Text>}
           {testsText !== '' && (
-            <Text color={testsColor} dimColor={b.tests.state === 'stale'}>
+            <Text color={testsColor} dimColor={b.tests.state === 'stale'} wrap="truncate-end">
               {testsText}
             </Text>
           )}
@@ -474,8 +447,10 @@ export const register: Register = (on, options) => {
     // Only columns that say something; callers and tests appear once there is something to report.
     const cols: Col[] = [
       ticket !== undefined
-        ? { key: 'ticket', label: 'ticket', value: ticket, sub: ticketUrl(ticket, jira).replace(/^https:\/\//, '') }
-        : { key: 'ticket', label: 'ticket', value: 'sin ticket', sub: 'la rama no nombra ninguno', tone: 'warning' },
+        ? { key: 'ticket', label: 'ticket', value: ticket, sub: b.branch }
+        : warning !== undefined
+          ? { key: 'ticket', label: 'ticket', value: warning, sub: 'usa release-(WIP)', tone: 'warning' }
+          : { key: 'ticket', label: 'ticket', value: 'sin ticket', sub: 'la rama no lo nombra', tone: 'warning' },
       { key: 'tokens', label: 'tokens', value: fmtTokens(totalTokens(b.tokens)), sub: `${b.turns} ${b.turns === 1 ? 'turno' : 'turnos'}` },
       { key: 'time', label: 'tiempo agente', value: elapsed(b.busyMs), sub: b.turns > 0 ? `⌀ ${elapsed(b.busyMs / b.turns)} / turno` : '' },
     ]
@@ -488,7 +463,7 @@ export const register: Register = (on, options) => {
         key: 'tests',
         label: 'tests',
         value: testsText.replace(/^[✓✗] /, ''),
-        sub: b.tests.state === 'pass' ? 'tras el último cambio' : b.tests.state === 'fail' ? 'última ejecución' : 'código cambiado después',
+        sub: b.tests.state === 'pass' ? 'tras el cambio' : b.tests.state === 'fail' ? 'última ejecución' : 'código cambiado',
         tone: b.tests.state === 'pass' ? 'success' : b.tests.state === 'fail' ? 'error' : undefined,
       })
     }
@@ -522,7 +497,7 @@ export const register: Register = (on, options) => {
 
     return stack(
       // The desktop's SVG draws its own line at the top, which would touch the buttons without the gap.
-      <Box flexDirection="column" width={width} gap={e.surface === 'desktop' ? 1 : 0}>
+      <Box key="band" flexDirection="column" width={width} gap={e.surface === 'desktop' ? 1 : 0}>
         <Box flexDirection="row" alignItems="center" gap={1}>
           {LEVELS.map(level => (
             <Button
@@ -532,7 +507,6 @@ export const register: Register = (on, options) => {
               onPress={() => setLevel(level)}
             />
           ))}
-          {warningChip}
           <Box flexGrow={1} />
           {buttons}
           <Button key="details" plain label="Compacto" onPress={toggle} />
