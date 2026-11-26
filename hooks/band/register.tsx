@@ -2,8 +2,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { boardHtml, tasksFrom } from './board'
-import { JIRA_KEYS, JIRA_URL, flowWarning, ticketFrom, ticketUrl } from './ibancar'
-import type { Band } from './types'
+import { JIRA_URL, flowWarning, readLookup, ticketCandidates, ticketUrl } from './ibancar'
+import type { Lookup } from './ibancar'
+import type { Band, Ticket } from './types'
 import type { Col } from './metrics'
 import {
   GREP_DEFS,
@@ -57,6 +58,7 @@ const EMPTY: Band = {
   tests: { state: 'none' },
   details: false,
   branch: '',
+  ticket: { branch: '', state: 'none' },
 }
 // The counters of one task: what a new session or /clear starts over.
 const TASK = {
@@ -109,6 +111,36 @@ async function readLevel($: EngineInterface): Promise<string> {
 async function readBranch($: EngineInterface): Promise<string> {
   const git = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).catch(() => undefined)
   return git?.exitCode === 0 ? git.stdout.trim() : ''
+}
+
+const jiraBase = (options: Options) => (typeof options.jiraUrl === 'string' && options.jiraUrl.trim() !== '' ? options.jiraUrl.trim() : JIRA_URL)
+
+// Asks Jira, through the session's Atlassian connector, whether a key is a ticket. Kept a day when it is, an hour
+// when it is not; no answer is never kept, so the next turn asks again.
+async function lookup($: EngineInterface, key: string, options: Options): Promise<Lookup> {
+  const cacheKey = `jira:${key}`
+  const now = await $.clock.now()
+  const hit = (await $.store.get(cacheKey)) as (Lookup & { at: number }) | undefined
+  if (hit && now - hit.at < (hit.state === 'ok' ? 86_400_000 : 3_600_000)) return hit
+  const server = typeof options.jiraServer === 'string' && options.jiraServer.trim() !== '' ? options.jiraServer.trim() : 'Atlassian_MCP'
+  const host = jiraBase(options).replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+  const r = await $.mcp
+    .call(server, 'getJiraIssue', { cloudId: host, issueIdOrKey: key, fields: ['summary'], fieldsByKeys: true })
+    .catch(() => undefined)
+  const found = readLookup(r)
+  if (found.state !== 'unknown') await $.store.set(cacheKey, { ...found, at: now })
+  return found
+}
+
+// The branch's ticket: the first candidate Jira knows; unverified when Jira could not be asked about one.
+async function resolveTicket($: EngineInterface, branch: string, options: Options): Promise<Ticket> {
+  let unverified: string | undefined
+  for (const key of ticketCandidates(branch)) {
+    const found = await lookup($, key, options)
+    if (found.state === 'ok') return { branch, key, state: 'ok', summary: found.summary }
+    if (found.state === 'unknown' && unverified === undefined) unverified = key
+  }
+  return unverified !== undefined ? { branch, key: unverified, state: 'unverified' } : { branch, state: 'none' }
 }
 
 // The same commands a person types, so ponytail's own skills and hooks stay the only logic.
@@ -205,7 +237,7 @@ async function openBoard($: EngineInterface) {
 }
 
 // Sets the band up for a session (level, project, task row, cost baseline); returns the definitions that exist now.
-async function start($: EngineInterface): Promise<Map<string, string>> {
+async function start($: EngineInterface, options: Options): Promise<Map<string, string>> {
   // Leave out what never counts as reuse (SKIP_DIR) so a big repo stays under process.run's 4 MiB of output.
   // shortcut: past 4 MiB the rest is dropped; git lists paths in order, so app code before resources/ and routes/ is kept.
   const skip = ['node_modules', 'vendor', 'dist', 'build', 'migrations', 'tests', 'test', '__tests__', 'spec', 'fixtures'].map(d => `:(exclude,glob)**/${d}/**`)
@@ -220,7 +252,8 @@ async function start($: EngineInterface): Promise<Map<string, string>> {
   const csv = usage ? await $.fs.read(ledgerFile(await ledgerDir($), project)).catch(() => '') : ''
   const key = usage ? taskKey(session, usage.startedAt) : ''
   const branch = await readBranch($)
-  await update($, band, b => resume({ ...EMPTY, ...b, level, details, project, session, branch, cost: usage?.cost?.usd ?? b.cost }, csv, key))
+  const ticket = await resolveTicket($, branch, options)
+  await update($, band, b => resume({ ...EMPTY, ...b, level, details, project, session, branch, ticket, cost: usage?.cost?.usd ?? b.cost }, csv, key))
   return grep?.exitCode === 0 ? parseDefs(grep.stdout) : new Map()
 }
 
@@ -229,7 +262,7 @@ export const register: Register = (on, options) => {
   let known = new Map<string, string>()
 
   on('session.start', async ($, e, next) => {
-    known = await start($)
+    known = await start($, options)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -242,7 +275,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: ['clear', 'resume', 'branch'] }, async ($, e, next) => {
     const session = await $.session.id()
     const result = await next(e)
-    if ((await $.session.id()) !== session) known = await start($).catch(() => known)
+    if ((await $.session.id()) !== session) known = await start($, options).catch(() => known)
     return result
   }).catch(($, e, next) => next(e))
 
@@ -318,8 +351,10 @@ export const register: Register = (on, options) => {
     const transcript = kept ? saved : await findTranscript($, session)
     const title = await readTitle($, transcript)
     const model = await readModel($, transcript)
-    // A turn can switch or create the branch.
+    // A turn can switch or create the branch; Jira is asked again when it did, or when it could not answer before.
     const branch = await readBranch($)
+    const before = (await load($)).ticket
+    const ticket = before.branch === branch && before.state !== 'unverified' ? before : await resolveTicket($, branch, options)
 
     // A removed or renamed definition that is not defined again but still called somewhere.
     // shortcut: name match with git grep, so a same-named call in another module counts too.
@@ -358,6 +393,7 @@ export const register: Register = (on, options) => {
         removed: stillRemoved,
         openCallers: open,
         branch,
+        ticket,
       }
     })
     await record($, b, options).catch(() => $.ui.status('ponytail band: could not write the task ledger'))
@@ -403,14 +439,15 @@ export const register: Register = (on, options) => {
             : ''
     const testsColor = b.tests.state === 'pass' ? 'success' : b.tests.state === 'fail' ? 'error' : undefined
     const hasOpen = b.openCallers.length > 0
-    const keys = typeof options.jiraKeys === 'string' && options.jiraKeys.trim() !== '' ? options.jiraKeys.split(',').map(k => k.trim().toUpperCase()) : JIRA_KEYS
-    const ticket = ticketFrom(b.branch, keys)
+    // Only what Jira confirmed for this branch; a ticket read before a branch switch is not shown.
+    const t = b.ticket.branch === b.branch ? b.ticket : { branch: b.branch, state: 'none' as const }
+    const ticket = t.state === 'none' ? undefined : t.key
     const warning = flowWarning(b.branch)
-    const jira = typeof options.jiraUrl === 'string' && options.jiraUrl.trim() !== '' ? options.jiraUrl.trim() : JIRA_URL
+    const jira = jiraBase(options)
     // Where the cost was, one slot: the ticket the branch names, else a protected branch, else plainly no ticket.
     const ticketChip =
       ticket !== undefined ? (
-        <Link href={ticketUrl(ticket, jira)} label={ticket} />
+        <Link href={ticketUrl(ticket, jira)} label={t.state === 'unverified' ? `${ticket} (sin verificar)` : ticket} />
       ) : (
         <Text color="warning" wrap="truncate-end">
           ⚠ {warning ?? 'sin ticket asociado'}
@@ -451,7 +488,7 @@ export const register: Register = (on, options) => {
     // Only columns that say something; callers and tests appear once there is something to report.
     const cols: Col[] = [
       ticket !== undefined
-        ? { key: 'ticket', label: 'ticket', value: ticket, sub: b.branch }
+        ? { key: 'ticket', label: 'ticket', value: ticket, sub: t.state === 'ok' ? (t.summary ?? '') : 'sin verificar en Jira', tone: t.state === 'ok' ? undefined : 'warning' }
         : warning !== undefined
           ? { key: 'ticket', label: 'ticket', value: warning, sub: 'usa release-(WIP)', tone: 'warning' }
           : { key: 'ticket', label: 'ticket', value: 'sin ticket', sub: 'la rama no lo nombra', tone: 'warning' },

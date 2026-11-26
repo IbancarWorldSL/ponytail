@@ -5,17 +5,31 @@ export const JIRA_URL = 'https://ibancar.atlassian.net'
 // Feature work starts from release-(WIP) and goes to develop as a draft PR; nobody commits on these.
 export const PROTECTED = ['develop', 'master', 'main', 'release-(WIP)']
 
-// The site's Jira project keys: only these name a ticket, so claude/gracious-goodall-5 is not GOODALL-5.
-export const JIRA_KEYS = ['TI', 'IT', 'SI', 'BS', 'MI', 'MARK', 'MP9', 'SCRUMBAN']
-
-// The first key of a known project in a branch name, upper-cased: feat/ti-4658-acuerdos -> TI-4658.
-export function ticketFrom(branch: string, keys: readonly string[] = JIRA_KEYS): string | undefined {
-  const re = /(?:^|[^A-Za-z0-9])([A-Za-z][A-Za-z0-9]+)-(\d+)(?![0-9])/g
-  for (const m of branch.matchAll(re)) {
+// Every `KEY-number` in a branch name, upper-cased, in order: candidates only. Jira says which is a ticket,
+// so claude/gracious-goodall-5 (GOODALL-5) or chore/php-8 (PHP-8) never show as one.
+export function ticketCandidates(branch: string): string[] {
+  const keys: string[] = []
+  for (const m of branch.matchAll(/(?:^|[^A-Za-z0-9])([A-Za-z][A-Za-z0-9]+-\d+)(?![0-9])/g)) {
     const key = (m[1] ?? '').toUpperCase()
-    if (keys.includes(key)) return `${key}-${m[2]}`
+    if (!keys.includes(key)) keys.push(key)
   }
-  return undefined
+  return keys
+}
+
+// What Jira said about one key: it exists (with its title), it does not, or no answer to go by.
+export type Lookup = { state: 'ok'; summary: string } | { state: 'missing' } | { state: 'unknown' }
+
+// Reads a getJiraIssue result from the Atlassian connector: an issue, a 404, or anything else.
+export function readLookup(r: { isError: boolean; content: readonly { type: string; text?: string }[] } | undefined): Lookup {
+  const text = r?.content.map(c => c.text ?? '').join('') ?? ''
+  if (r === undefined) return { state: 'unknown' }
+  if (r.isError) return /"statusCode"\s*:\s*404|not found/i.test(text) ? { state: 'missing' } : { state: 'unknown' }
+  try {
+    const issue = JSON.parse(text)?.issues?.nodes?.[0]
+    return issue?.key ? { state: 'ok', summary: String(issue.fields?.summary ?? '') } : { state: 'unknown' }
+  } catch {
+    return { state: 'unknown' }
+  }
 }
 
 export const ticketUrl = (key: string, base = JIRA_URL) => `${base.replace(/\/+$/, '')}/browse/${key}`

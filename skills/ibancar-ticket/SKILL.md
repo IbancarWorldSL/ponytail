@@ -17,7 +17,7 @@ Responde en español y dirígete al dev directamente. No cambies código.
 
 ## 1. Encuentra el ticket
 
-Busca claves de Jira (`<PROYECTO>-<número>`, normalmente `TI-XXXX`) en este orden. Solo cuentan los proyectos `TI`, `IT`, `SI`, `BS`, `MI`, `MARK`, `MP9` o `SCRUMBAN`; cualquier otra combinación (`GOODALL-5`, `UTF-8`, `PHP-8`) no es un ticket:
+Busca claves de Jira (`<PROYECTO>-<número>`, normalmente `TI-XXXX`) en este orden. Cada clave es solo un candidato: compruébala con `getJiraIssue`, y si Jira responde que no existe (`GOODALL-5`, `UTF-8`, `PHP-8`), no es un ticket:
 
 1. El nombre de la rama: `git rev-parse --abbrev-ref HEAD`.
 2. La PR abierta de la rama: `gh api "repos/{owner}/{repo}/pulls?head={owner}:{rama}&state=open"`
