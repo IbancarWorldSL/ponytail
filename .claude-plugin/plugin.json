@@ -41,6 +41,12 @@
       "title": "Jira",
       "description": "Base URL of the Jira site the branch ticket (TI-XXXX) links to.",
       "default": "https://ibancar.atlassian.net"
+    },
+    "jiraServer": {
+      "type": "string",
+      "title": "Jira connector",
+      "description": "Name of the Atlassian MCP connector the band asks whether a branch ticket exists, as /mcp lists it.",
+      "default": "Atlassian_MCP"
     }
   }
 }

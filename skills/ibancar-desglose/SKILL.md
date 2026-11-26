@@ -14,7 +14,7 @@ rama actual. Responde en español.
 ## 1. Delimita la PR
 
 - Rama: `git rev-parse --abbrev-ref HEAD`.
-- Ticket: la primera clave `[A-Z][A-Z0-9]+-\d+` de la rama, en mayúsculas;
+- Ticket: la primera clave `<PROYECTO>-<número>` de la rama, en mayúsculas; es ticket solo si `getJiraIssue` lo encuentra en Jira;
   si no hay, mira el título de la PR abierta
   (`gh api "repos/{owner}/{repo}/pulls?head={owner}:{rama}&state=open"`) y
   los commits.

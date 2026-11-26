@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { boardHtml, parseCsv, tasksFrom } from '../hooks/band/board'
 import type { Band } from '../hooks/band/types'
-import { flowWarning, ticketFrom, ticketUrl } from '../hooks/band/ibancar'
+import { flowWarning, readLookup, ticketCandidates, ticketUrl } from '../hooks/band/ibancar'
 import {
   NO_TOKENS,
   addTokens,
@@ -193,6 +193,21 @@ describe('metrics', () => {
     expect(defsIn('a.py', 'def to_cents(x):\n    pass\nclass Cart:\n    def total(self): pass')).toEqual(['to_cents', 'Cart'])
     expect(defsIn('a.ts', 'export function formatMoney() {}\nfunction local() {}\nconst x = 1')).toEqual(['formatMoney', 'local'])
     expect(defsIn('README.md', 'def nope():')).toEqual([])
+  })
+
+  test('finds PHP and Vue definitions, as the CRM writes them', () => {
+    const php = 'class ContratoAcuerdo extends BaseModel {\n\tpublic function producto()\n\t{\n\t\treturn 1;\n\t}\n\tprotected static function calcularDemora($c) {}\n\tprivate function &ref() {}\n}\ntrait Auditable {}'
+    expect(defsIn('app/ContratoAcuerdo.php', php)).toEqual(['producto', 'calcularDemora', 'ref', 'ContratoAcuerdo', 'Auditable'])
+    const vue = '<script>\nexport default {\n  methods: {\n    calcularCuota(importe) {\n      if (importe) {\n        return importe\n      }\n    },\n  },\n}\nexport function formatoEuros(v) {}\n</script>'
+    expect(defsIn('resources/js/Cuotas.vue', vue)).toEqual(['formatoEuros', 'calcularCuota'])
+    // git grep at session start sees PHP methods, so a later call to one counts as reuse.
+    const known = parseDefs('app/Contrato.php:12:    public function getDeudaContrato($fecha)\ntests/Feature/XTest.php:3:    public function helper()')
+    expect([...known.keys()]).toEqual(['getDeudaContrato'])
+    expect(callsIn('$deuda = $this->contrato->getDeudaContrato($hoy);', known, [])).toEqual(['getDeudaContrato'])
+    expect(isTestCommand('php artisan test --filter=Collection')).toBe(true)
+    expect(isTestCommand('./vendor/bin/pest --parallel')).toBe(true)
+    const setup = '<script setup lang="ts">\nconst cuota = ref(0)\nconst guardar = async (id: number) => {}\nconst limpiar = () => cuota.value = 0\nconst total = computed(() => cuota.value)\n</script>'
+    expect(defsIn('resources/js/Pago.vue', setup)).toEqual(['guardar', 'limpiar'])
   })
 
   test('counts calls of existing helpers, never new ones, test files or generic names', () => {
@@ -488,16 +503,25 @@ test('review and audit run the same commands a person types', async ($, on) => {
 })
 
 describe('ibancar', () => {
-  test('the ticket comes from the branch name, upper-cased', () => {
-    expect(ticketFrom('feat/TI-4658-acuerdos')).toBe('TI-4658')
-    expect(ticketFrom('feat/ti-4658_acuerdos')).toBe('TI-4658')
-    expect(ticketFrom('TI-4640')).toBe('TI-4640')
-    expect(ticketFrom('hotfix/CAR-12')).toBe('CAR-12')
-    expect(ticketFrom('aeh/cool-hypatia-ojysvf')).toBeUndefined()
-    expect(ticketFrom('release-(WIP)')).toBeUndefined()
+  test('every KEY-number in the branch is a candidate, upper-cased, in order', () => {
+    expect(ticketCandidates('feat/TI-4658-acuerdos')).toEqual(['TI-4658'])
+    expect(ticketCandidates('feat/ti-4658_acuerdos')).toEqual(['TI-4658'])
+    // Looks like a key: a candidate, which Jira then turns down.
+    expect(ticketCandidates('claude/gracious-goodall-5pad6z-b5')).toEqual(['GOODALL-5'])
+    expect(ticketCandidates('claude/goodall-5-TI-4700')).toEqual(['GOODALL-5', 'TI-4700'])
+    expect(ticketCandidates('aeh/cool-hypatia-ojysvf')).toEqual([])
+    expect(ticketCandidates('release-(WIP)')).toEqual([])
     expect(ticketUrl('TI-1', 'https://x.atlassian.net/')).toBe('https://x.atlassian.net/browse/TI-1')
   })
 
+  test("Jira's answer: an issue, a 404, or nothing to go by", () => {
+    const issue = { isError: false, content: [{ type: 'text', text: JSON.stringify({ issues: { nodes: [{ key: 'TI-4658', fields: { summary: 'Fallo en cron collection' } }] } }) }] }
+    expect(readLookup(issue)).toEqual({ state: 'ok', summary: 'Fallo en cron collection' })
+    expect(readLookup({ isError: true, content: [{ type: 'text', text: '{"error":true,"message":"Issue \\"GOODALL-5\\" not found","statusCode":404}' }] })).toEqual({ state: 'missing' })
+    expect(readLookup({ isError: true, content: [{ type: 'text', text: '{"error":true,"statusCode":401}' }] })).toEqual({ state: 'unknown' })
+    expect(readLookup({ isError: false, content: [{ type: 'text', text: 'not json' }] })).toEqual({ state: 'unknown' })
+    expect(readLookup(undefined)).toEqual({ state: 'unknown' })
+  })
 
   test('the flow warns on protected branches and on work without a ticket', () => {
     expect(flowWarning('develop')).toBe('en develop')
@@ -509,14 +533,26 @@ describe('ibancar', () => {
   })
 })
 
-const onBranch = (on: Parameters<Parameters<typeof test>[1]>[1], branch: string) =>
-  on('process.run', ($, e) =>
-    ({ value: e.argv[0] === 'git' && e.argv[1] === 'rev-parse' ? { exitCode: 0, stdout: `${branch}\n`, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }) as never)
+type On = Parameters<Parameters<typeof test>[1]>[1]
 
-test('the band links the branch ticket to Jira and shows no cost', async ($, on) => {
-  mock.clock(on)
-  mock.store(on)
-  onBranch(on, 'feat/TI-4658-acuerdos')
+// Jira through the Atlassian connector: these keys exist, any other is a 404; `down` answers nothing.
+const onJira = (on: On, known: Record<string, string>, down = false) => {
+  const asked: string[] = []
+  on('mcp.call', ($, e) => {
+    const key = String(e.args.issueIdOrKey)
+    asked.push(`${e.server}/${e.tool}/${key}`)
+    if (down) return { deny: 'connector not connected' }
+    const summary = known[key]
+    return {
+      value: summary !== undefined
+        ? { isError: false, content: [{ type: 'text', text: JSON.stringify({ issues: { nodes: [{ key, fields: { summary } }] } }) }] }
+        : { isError: true, content: [{ type: 'text', text: `{"error":true,"message":"Issue \\"${key}\\" not found","statusCode":404}` }] },
+    }
+  })
+  return asked
+}
+
+const startSession = async ($: Parameters<Parameters<typeof test>[1]>[0], on: On) => {
   on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
   on('fs.read', () => ({ deny: 'missing' }) as never)
   on('session.repo', () => ({ value: { root: '/repo/crm' } }) as never)
@@ -524,6 +560,19 @@ test('the band links the branch ticket to Jira and shows no cost', async ($, on)
   on('session.usage', () => ({ value: { startedAt: 0 } }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/repo/crm', surface: null } as never)
+}
+
+const onBranch = (on: On, branch: string) =>
+  on('process.run', ($, e) =>
+    ({ value: e.argv[0] === 'git' && e.argv[1] === 'rev-parse' ? { exitCode: 0, stdout: `${branch}\n`, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }) as never)
+
+test('the band links the branch ticket once Jira confirms it, and shows no cost', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  onBranch(on, 'feat/TI-4658-acuerdos')
+  const asked = onJira(on, { 'TI-4658': 'Fallo en cron collection' })
+  await startSession($, on)
+  expect(asked).toEqual(['Atlassian_MCP/getJiraIssue/TI-4658'])
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'ponytail', surface, ...BAND })
     const link = await ui.find({ type: 'Link' })
@@ -535,17 +584,38 @@ test('the band links the branch ticket to Jira and shows no cost', async ($, on)
   }
 })
 
+test('a key Jira does not know is no ticket, and the answer is kept', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  onBranch(on, 'claude/gracious-goodall-5')
+  const asked = onJira(on, {})
+  await startSession($, on)
+  const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
+  expect(await ui.find({ type: 'Link' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /⚠ sin ticket asociado/ })).toBeDefined()
+  await ui.unmount()
+  // A second start within the hour reads the kept 404: Jira is not asked again.
+  await $.session.start({ cwd: '/repo/crm', surface: null } as never)
+  expect(asked).toEqual(['Atlassian_MCP/getJiraIssue/GOODALL-5'])
+})
+
+test('with Jira unreachable the key shows, marked unverified', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  onBranch(on, 'feat/TI-4658-acuerdos')
+  onJira(on, {}, true)
+  await startSession($, on)
+  const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
+  expect((await ui.find({ type: 'Link' }))?.text).toBe('TI-4658 (sin verificar)')
+  await ui.unmount()
+})
+
 test('the band warns when the work is on develop', async ($, on) => {
   mock.clock(on)
   mock.store(on)
   onBranch(on, 'develop')
-  on('env.get', ($, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
-  on('fs.read', () => ({ deny: 'missing' }) as never)
-  on('session.repo', () => ({ value: { root: '/repo/crm' } }) as never)
-  on('session.id', () => ({ value: 's1' }))
-  on('session.usage', () => ({ value: { startedAt: 0 } }) as never)
-  on('session.start', ($, e) => ({ cwd: e.cwd }))
-  await $.session.start({ cwd: '/repo/crm', surface: null } as never)
+  onJira(on, {})
+  await startSession($, on)
   const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
   expect(await ui.find({ type: 'Link' })).toBeUndefined()
   // On develop the slot says so instead of the missing ticket.
