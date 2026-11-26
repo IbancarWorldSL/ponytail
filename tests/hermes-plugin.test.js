@@ -89,6 +89,7 @@ print(json.dumps({'skills': ctx.skills, 'hooks': ctx.hooks, 'commands': ctx.comm
   const data = JSON.parse(output);
   assert.deepEqual(data.skills.map(([name]) => name).sort(), [
     'ibancar-pr',
+    'ibancar-review',
     'ibancar-ticket',
     'ponytail',
     'ponytail-audit',

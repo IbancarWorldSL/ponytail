@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 
 import { boardHtml, parseCsv, tasksFrom } from '../hooks/band/board'
 import type { Band } from '../hooks/band/types'
-import { flowWarning, ticketFrom, ticketUrl } from '../hooks/band/ibancar'
+import { DIFF_LIMIT, breakdownPrompt, flowWarning, ticketFrom, ticketUrl } from '../hooks/band/ibancar'
 import {
   NO_TOKENS,
   addTokens,
@@ -276,7 +276,7 @@ test('the details view has its line without empty rows, and off the terminal its
     expect(await ui.find({ type: 'Text', text: /─/ })).toBeDefined()
     expect((await ui.find({ type: 'Box' }))?.props.gap).toBe(0)
     const tokens = (await ui.find({ key: 'tokens' }))?.props
-    expect(surface === 'terminal' ? tokens?.width : tokens?.flexGrow).toBe(surface === 'terminal' ? 48 : 1)
+    expect(surface === 'terminal' ? tokens?.width : tokens?.flexGrow).toBe(surface === 'terminal' ? 31 : 1)
     // The view is stored, so the next surface would start in details: switch back.
     await ui.press({ key: 'details' })
     await ui.unmount()
@@ -477,14 +477,13 @@ test('review and audit run the same commands a person types', async ($, on) => {
   expect(sent).toEqual(['/ponytail:ponytail lite'])
   sent.length = 0
   await ui.press({ key: 'review' })
-  await ui.press({ key: 'ticket-audit' })
-  await ui.press({ key: 'pr' })
   await ui.press({ key: 'audit' })
-  expect(sent).toEqual(['/ponytail:ponytail-review', '/ponytail:ibancar-ticket', '/ponytail:ibancar-pr', '/ponytail:ponytail-audit'])
-  // Compact keeps the team's buttons; the repo audit lives in details, next to the levels.
+  await ui.press({ key: 'pr' })
+  expect(sent).toEqual(['/ponytail:ibancar-review', '/ponytail:ibancar-ticket', '/ponytail:ibancar-pr'])
+  // Compact has the same buttons, and no copy.
   await ui.press({ key: 'details' })
-  expect(await ui.find({ key: 'ticket-audit' })).toBeDefined()
-  expect(await ui.find({ key: 'audit' })).toBeUndefined()
+  for (const key of ['breakdown', 'review', 'audit', 'pr', 'board']) expect(await ui.find({ key })).toBeDefined()
+  expect(await ui.find({ key: 'copy' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -499,10 +498,17 @@ describe('ibancar', () => {
     expect(ticketUrl('TI-1', 'https://x.atlassian.net/')).toBe('https://x.atlassian.net/browse/TI-1')
   })
 
+  test('the breakdown prompt names the ticket and cuts a huge diff', () => {
+    const p = breakdownPrompt({ branch: 'b', base: 'origin/develop', log: 'x', stat: 'y', diff: 'z'.repeat(DIFF_LIMIT + 10) })
+    expect(p).toContain('Ticket: ninguno')
+    expect(p).toContain('recortado="sí"')
+    expect(p.length).toBeLessThan(DIFF_LIMIT + 2000)
+  })
+
   test('the flow warns on protected branches and on work without a ticket', () => {
     expect(flowWarning('develop')).toContain('release-(WIP)')
     expect(flowWarning('release-(WIP)')).toContain('estás en release-(WIP)')
-    expect(flowWarning('feat/varios-arreglos')).toBe('rama sin ticket TI-XXXX')
+    expect(flowWarning('feat/varios-arreglos')).toBeUndefined()
     expect(flowWarning('feat/TI-4658-acuerdos')).toBeUndefined()
     expect(flowWarning('')).toBeUndefined()
     expect(flowWarning('HEAD')).toBeUndefined()
@@ -548,26 +554,56 @@ test('the band warns when the work is on develop', async ($, on) => {
   await $.session.start({ cwd: '/repo/crm', surface: null } as never)
   const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
   expect(await ui.find({ type: 'Link' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /⚠ sin ticket asociado/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /⚠ estás en develop/ })).toBeDefined()
   await ui.unmount()
 })
 
-test('copy hands the task to the clipboard as Markdown', async ($, on) => {
+test('desglose sums the PR up with the model and copies it, with no turn', async ($, on) => {
   mock.clock(on)
   mock.store(on)
+  const runs: string[] = []
+  on('process.run', ($, e) => {
+    const args = e.argv.join(' ')
+    runs.push(args)
+    const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } }) as never
+    if (args === 'git rev-parse --verify --quiet origin/develop') return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
+    if (args.startsWith('git rev-parse --verify')) return out('abc\n')
+    if (args === 'git rev-parse --abbrev-ref HEAD') return out('feat/TI-4658-acuerdos\n')
+    if (args === 'git diff origin/release-(WIP)...HEAD') return out('+ producto acuerdo\n')
+    if (args.startsWith('git log')) return out('TI-4658 Producto de acuerdos\n')
+    if (args.startsWith('git diff --stat')) return out(' app/ContratoAcuerdo.php | 2 +-\n')
+    return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
+  })
+  const prompts: string[] = []
+  on('model.complete', ($, e) => {
+    prompts.push(e.prompt)
+    return { value: { isAnswered: true, text: '## TI-4658: el cron usa el producto correcto\n', usage: {} } } as never
+  })
   const copied: string[] = []
   on('ui.copy', ($, e) => {
     copied.push(e.text)
     return { value: { isCopied: true as const } }
   })
-  on('ui.toast', () => ({ value: undefined }))
+  const toasts: string[] = []
+  on('ui.toast', ($, e) => {
+    toasts.push(String(e.text))
+    return { value: undefined }
+  })
+  const sent: string[] = []
+  on('command.run', ($, e) => {
+    sent.push(e.command)
+    return { text: '' }
+  })
   const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
-  await ui.press({ key: 'details' })
-  expect(await ui.find({ key: 'task' })).toBeUndefined()
-  await ui.press({ key: 'copy' })
-  expect(copied.length).toBe(1)
-  expect(copied[0]).toContain('## Untitled session')
-  expect(copied[0]).toContain('| Turns | 0 |')
+  await ui.press({ key: 'breakdown' })
+  // No develop in the clone: the next base that exists.
+  expect(runs).toContain('git diff origin/release-(WIP)...HEAD')
+  expect(prompts[0]).toContain('Ticket: TI-4658')
+  expect(prompts[0]).toContain('+ producto acuerdo')
+  expect(copied).toEqual(['## TI-4658: el cron usa el producto correcto'])
+  expect(toasts.at(-1)).toBe('Desglose de la PR copiado')
+  expect(sent).toEqual([])
   await ui.unmount()
 })
 

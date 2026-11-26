@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { boardHtml, tasksFrom } from './board'
-import { JIRA_URL, flowWarning, ticketFrom, ticketUrl } from './ibancar'
+import { BASES, BREAKDOWN_SYSTEM, JIRA_URL, breakdownPrompt, flowWarning, ticketFrom, ticketUrl } from './ibancar'
 import type { Band } from './types'
 import type { Col } from './metrics'
 import {
@@ -20,7 +20,6 @@ import {
   isSource,
   isTestCommand,
   mainModel,
-  markdown,
   metricsSvg,
   MODEL_PATTERN,
   parseDefs,
@@ -110,6 +109,38 @@ async function readLevel($: EngineInterface): Promise<string> {
 async function readBranch($: EngineInterface): Promise<string> {
   const git = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).catch(() => undefined)
   return git?.exitCode === 0 ? git.stdout.trim() : ''
+}
+
+// The PR in plain words, from its commits and diff against the first base that exists, straight to the clipboard: no turn.
+async function breakdown($: EngineInterface, surface: Parameters<EngineInterface['ui']['copy']>[0]['surface']) {
+  const git = async (...args: string[]) => {
+    const r = await $.process.run(['git', ...args]).catch(() => undefined)
+    return r?.exitCode === 0 ? r.stdout : undefined
+  }
+  let base: string | undefined
+  for (const b of BASES) if (base === undefined && (await git('rev-parse', '--verify', '--quiet', b)) !== undefined) base = b
+  if (base === undefined) return $.ui.toast('Desglose: no encuentro origin/develop ni otra rama base')
+  const diff = (await git('diff', `${base}...HEAD`)) ?? ''
+  if (diff.trim() === '') return $.ui.toast(`Desglose: no hay cambios respecto a ${base}`)
+  const branch = await readBranch($)
+  $.ui.toast('Generando desglose…')
+  const reply = await $.model.complete({
+    model: 'sonnet',
+    system: BREAKDOWN_SYSTEM,
+    prompt: breakdownPrompt({
+      branch,
+      ticket: ticketFrom(branch),
+      base,
+      log: (await git('log', '--format=%s', `${base}..HEAD`)) ?? '',
+      stat: (await git('diff', '--stat', `${base}...HEAD`)) ?? '',
+      diff,
+    }),
+    maxTokens: 2000,
+    timeoutMs: 120_000,
+  })
+  if (!reply.isAnswered) return $.ui.toast(`Desglose: el modelo no respondió (${reply.reason})`)
+  const done = await $.ui.copy({ text: reply.text.trim(), surface })
+  $.ui.toast(done.isCopied ? 'Desglose de la PR copiado' : `Desglose: no se pudo copiar (${done.reason})`)
 }
 
 // The same commands a person types, so ponytail's own skills and hooks stay the only logic.
@@ -370,8 +401,6 @@ export const register: Register = (on, options) => {
     const below = await next(e).catch(() => undefined)
 
     const b = await load($)
-    const now = await $.clock.now()
-    const startedAt = (await $.session.usage().catch(() => undefined))?.startedAt ?? now
     const reuse = percent(b.reused.length, b.created.length)
 
     const setLevel = async (level: string) => {
@@ -382,15 +411,11 @@ export const register: Register = (on, options) => {
       await update($, band, x => ({ ...x, details: !x.details }))
       await $.store.set('details', !b.details)
     }
-    const review = () => run($, 'ponytail:ponytail-review')
-    const audit = () => run($, 'ponytail:ponytail-audit')
-    const ticketAudit = () => run($, 'ponytail:ibancar-ticket')
+    const review = () => run($, 'ponytail:ibancar-review')
+    const audit = () => run($, 'ponytail:ibancar-ticket')
     const pr = () => run($, 'ponytail:ibancar-pr')
     const board = () => openBoard($).catch(() => $.ui.toast('ponytail band: no se pudo abrir el tablero'))
-    const copy = async () => {
-      const done = await $.ui.copy({ text: markdown(snapshot(await load($), startedAt)), surface: e.surface })
-      $.ui.toast(done.isCopied ? 'Tarea copiada en Markdown' : `No se pudo copiar: ${done.reason}`)
-    }
+    const desglose = () => breakdown($, e.surface).catch(() => $.ui.toast('Desglose: algo falló al generarlo'))
 
     const { Box, Text, Button, Link } = $.ui.resolve(e)
     // bodyColumns counts terminal cells; a graphical surface draws Buttons wider than their cells, so a row sized to it wraps there.
@@ -411,11 +436,15 @@ export const register: Register = (on, options) => {
     const ticket = ticketFrom(b.branch)
     const warning = flowWarning(b.branch)
     const jira = typeof options.jiraUrl === 'string' && options.jiraUrl.trim() !== '' ? options.jiraUrl.trim() : JIRA_URL
-    const ticketChip = ticket !== undefined && <Link href={ticketUrl(ticket, jira)} label={ticket} />
+    // Where the cost was: the ticket the branch names, or plainly that there is none.
+    const ticketChip = ticket !== undefined ? <Link href={ticketUrl(ticket, jira)} label={ticket} /> : <Text color="warning">⚠ sin ticket asociado</Text>
     const warningChip = warning !== undefined && <Text color="warning">⚠ {warning}</Text>
-    const ours = [
-      <Button key="ticket-audit" plain label="Auditar ticket" onPress={ticketAudit} />,
+    const buttons = [
+      <Button key="breakdown" plain label="Desglose" onPress={desglose} />,
+      <Button key="review" plain label="Revisar" onPress={review} />,
+      <Button key="audit" plain label="Auditar" onPress={audit} />,
       <Button key="pr" plain label="PR draft" onPress={pr} />,
+      <Button key="board" plain label="Tablero" onPress={board} />,
     ]
 
     if (!b.details) {
@@ -436,9 +465,7 @@ export const register: Register = (on, options) => {
             </Text>
           )}
           <Box flexGrow={1} />
-          {ours}
-          <Button key="review" plain label="Revisar" onPress={review} />
-          <Button key="board" plain label="Tablero" onPress={board} />
+          {buttons}
           <Button key="details" plain label="Detalles" onPress={toggle} />
         </Box>
       )
@@ -446,6 +473,9 @@ export const register: Register = (on, options) => {
 
     // Only columns that say something; callers and tests appear once there is something to report.
     const cols: Col[] = [
+      ticket !== undefined
+        ? { key: 'ticket', label: 'ticket', value: ticket, sub: ticketUrl(ticket, jira).replace(/^https:\/\//, '') }
+        : { key: 'ticket', label: 'ticket', value: 'sin ticket', sub: 'la rama no nombra ninguno', tone: 'warning' },
       { key: 'tokens', label: 'tokens', value: fmtTokens(totalTokens(b.tokens)), sub: `${b.turns} ${b.turns === 1 ? 'turno' : 'turnos'}` },
       { key: 'time', label: 'tiempo agente', value: elapsed(b.busyMs), sub: b.turns > 0 ? `⌀ ${elapsed(b.busyMs / b.turns)} / turno` : '' },
     ]
@@ -502,14 +532,9 @@ export const register: Register = (on, options) => {
               onPress={() => setLevel(level)}
             />
           ))}
-          {ticketChip}
           {warningChip}
           <Box flexGrow={1} />
-          {ours}
-          <Button key="copy" plain label="Copiar" onPress={copy} />
-          <Button key="review" plain label="Revisar" onPress={review} />
-          <Button key="audit" plain label="Auditar repo" onPress={audit} />
-          <Button key="board" plain label="Tablero" onPress={board} />
+          {buttons}
           <Button key="details" plain label="Compacto" onPress={toggle} />
         </Box>
         {metrics}
