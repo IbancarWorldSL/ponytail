@@ -478,12 +478,11 @@ test('review and audit run the same commands a person types', async ($, on) => {
   sent.length = 0
   await ui.press({ key: 'review' })
   await ui.press({ key: 'audit' })
-  await ui.press({ key: 'pr' })
-  expect(sent).toEqual(['/ponytail:ibancar-review', '/ponytail:ibancar-ticket', '/ponytail:ibancar-pr'])
-  // Compact has the same buttons, and no copy.
+  expect(sent).toEqual(['/ponytail:ibancar-review', '/ponytail:ibancar-ticket'])
+  // Compact has the same buttons; copy and the PR button are gone so the row fits.
   await ui.press({ key: 'details' })
-  for (const key of ['breakdown', 'review', 'audit', 'pr', 'board']) expect(await ui.find({ key })).toBeDefined()
-  expect(await ui.find({ key: 'copy' })).toBeUndefined()
+  for (const key of ['breakdown', 'review', 'audit', 'board']) expect(await ui.find({ key })).toBeDefined()
+  for (const key of ['copy', 'pr']) expect(await ui.find({ key })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -506,8 +505,8 @@ describe('ibancar', () => {
   })
 
   test('the flow warns on protected branches and on work without a ticket', () => {
-    expect(flowWarning('develop')).toContain('release-(WIP)')
-    expect(flowWarning('release-(WIP)')).toContain('estás en release-(WIP)')
+    expect(flowWarning('develop')).toBe('en develop')
+    expect(flowWarning('release-(WIP)')).toBe('en release-(WIP)')
     expect(flowWarning('feat/varios-arreglos')).toBeUndefined()
     expect(flowWarning('feat/TI-4658-acuerdos')).toBeUndefined()
     expect(flowWarning('')).toBeUndefined()
@@ -554,8 +553,9 @@ test('the band warns when the work is on develop', async ($, on) => {
   await $.session.start({ cwd: '/repo/crm', surface: null } as never)
   const ui = await $.ui.mount({ plugin: 'ponytail', surface: 'terminal', ...BAND })
   expect(await ui.find({ type: 'Link' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /⚠ sin ticket asociado/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /⚠ estás en develop/ })).toBeDefined()
+  // On develop the slot says so instead of the missing ticket.
+  expect(await ui.find({ type: 'Text', text: /⚠ en develop/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /sin ticket asociado/ })).toBeUndefined()
   await ui.unmount()
 })
 

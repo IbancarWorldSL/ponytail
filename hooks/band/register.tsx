@@ -413,7 +413,6 @@ export const register: Register = (on, options) => {
     }
     const review = () => run($, 'ponytail:ibancar-review')
     const audit = () => run($, 'ponytail:ibancar-ticket')
-    const pr = () => run($, 'ponytail:ibancar-pr')
     const board = () => openBoard($).catch(() => $.ui.toast('ponytail band: no se pudo abrir el tablero'))
     const desglose = () => breakdown($, e.surface).catch(() => $.ui.toast('Desglose: algo falló al generarlo'))
 
@@ -436,14 +435,14 @@ export const register: Register = (on, options) => {
     const ticket = ticketFrom(b.branch)
     const warning = flowWarning(b.branch)
     const jira = typeof options.jiraUrl === 'string' && options.jiraUrl.trim() !== '' ? options.jiraUrl.trim() : JIRA_URL
-    // Where the cost was: the ticket the branch names, or plainly that there is none.
-    const ticketChip = ticket !== undefined ? <Link href={ticketUrl(ticket, jira)} label={ticket} /> : <Text color="warning">⚠ sin ticket asociado</Text>
-    const warningChip = warning !== undefined && <Text color="warning">⚠ {warning}</Text>
+    // Where the cost was, one slot: the ticket the branch names, else a protected branch, else plainly no ticket.
+    const ticketChip =
+      ticket !== undefined ? <Link href={ticketUrl(ticket, jira)} label={ticket} /> : <Text color="warning">⚠ {warning ?? 'sin ticket asociado'}</Text>
+    // The original band's slots, same count: a longer row does not fit the panel.
     const buttons = [
       <Button key="breakdown" plain label="Desglose" onPress={desglose} />,
       <Button key="review" plain label="Revisar" onPress={review} />,
       <Button key="audit" plain label="Auditar" onPress={audit} />,
-      <Button key="pr" plain label="PR draft" onPress={pr} />,
       <Button key="board" plain label="Tablero" onPress={board} />,
     ]
 
@@ -455,7 +454,6 @@ export const register: Register = (on, options) => {
             <Text color={b.level === 'off' ? 'inactive' : 'suggestion'}>●</Text> {b.level}
           </Button>
           {ticketChip}
-          {warningChip}
           <Text dimColor>{elapsed(b.busyMs)}</Text>
           {reuse !== undefined && <Text>{reuse}% reutilizado</Text>}
           {hasOpen && <Text color="warning">⚠ {b.openCallers.length} llamadas abiertas</Text>}
@@ -474,8 +472,10 @@ export const register: Register = (on, options) => {
     // Only columns that say something; callers and tests appear once there is something to report.
     const cols: Col[] = [
       ticket !== undefined
-        ? { key: 'ticket', label: 'ticket', value: ticket, sub: ticketUrl(ticket, jira).replace(/^https:\/\//, '') }
-        : { key: 'ticket', label: 'ticket', value: 'sin ticket', sub: 'la rama no nombra ninguno', tone: 'warning' },
+        ? { key: 'ticket', label: 'ticket', value: ticket, sub: b.branch }
+        : warning !== undefined
+          ? { key: 'ticket', label: 'ticket', value: warning, sub: 'usa release-(WIP)', tone: 'warning' }
+          : { key: 'ticket', label: 'ticket', value: 'sin ticket', sub: 'la rama no lo nombra', tone: 'warning' },
       { key: 'tokens', label: 'tokens', value: fmtTokens(totalTokens(b.tokens)), sub: `${b.turns} ${b.turns === 1 ? 'turno' : 'turnos'}` },
       { key: 'time', label: 'tiempo agente', value: elapsed(b.busyMs), sub: b.turns > 0 ? `⌀ ${elapsed(b.busyMs / b.turns)} / turno` : '' },
     ]
@@ -488,7 +488,7 @@ export const register: Register = (on, options) => {
         key: 'tests',
         label: 'tests',
         value: testsText.replace(/^[✓✗] /, ''),
-        sub: b.tests.state === 'pass' ? 'tras el último cambio' : b.tests.state === 'fail' ? 'última ejecución' : 'código cambiado después',
+        sub: b.tests.state === 'pass' ? 'tras el cambio' : b.tests.state === 'fail' ? 'última ejecución' : 'código cambiado',
         tone: b.tests.state === 'pass' ? 'success' : b.tests.state === 'fail' ? 'error' : undefined,
       })
     }
@@ -532,7 +532,6 @@ export const register: Register = (on, options) => {
               onPress={() => setLevel(level)}
             />
           ))}
-          {warningChip}
           <Box flexGrow={1} />
           {buttons}
           <Button key="details" plain label="Compacto" onPress={toggle} />

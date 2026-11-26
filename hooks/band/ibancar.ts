@@ -15,9 +15,9 @@ export function ticketFrom(branch: string): string | undefined {
 
 export const ticketUrl = (key: string, base = JIRA_URL) => `${base.replace(/\/+$/, '')}/browse/${key}`
 
-// Work on a protected branch. No branch (detached HEAD, not a repo): nothing to say.
+// Work on a protected branch, short enough for the band's ticket slot. No branch (detached HEAD, not a repo): nothing to say.
 export function flowWarning(branch: string): string | undefined {
-  return PROTECTED.includes(branch) ? `estás en ${branch}: crea una rama desde release-(WIP)` : undefined
+  return PROTECTED.includes(branch) ? `en ${branch}` : undefined
 }
 
 // shortcut: the diff is cut at this many characters, so a huge PR is summed up from its start and its file list; split the call per file if that falls short.
