@@ -41,6 +41,12 @@
       "title": "Jira",
       "description": "Base URL of the Jira site the branch ticket (TI-XXXX) links to.",
       "default": "https://ibancar.atlassian.net"
+    },
+    "jiraKeys": {
+      "type": "string",
+      "title": "Jira project keys",
+      "description": "Comma-separated Jira project keys a branch name may carry (TI-4658). Anything else is not a ticket.",
+      "default": "TI,IT,SI,BS,MI,MARK,MP9,SCRUMBAN"
     }
   }
 }

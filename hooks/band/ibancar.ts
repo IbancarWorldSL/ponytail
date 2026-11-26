@@ -5,9 +5,17 @@ export const JIRA_URL = 'https://ibancar.atlassian.net'
 // Feature work starts from release-(WIP) and goes to develop as a draft PR; nobody commits on these.
 export const PROTECTED = ['develop', 'master', 'main', 'release-(WIP)']
 
-// The first Jira key in a branch name, upper-cased: feat/ti-4658-acuerdos -> TI-4658.
-export function ticketFrom(branch: string): string | undefined {
-  return /(?:^|[^A-Za-z0-9])([A-Za-z][A-Za-z0-9]+-\d+)(?![0-9])/.exec(branch)?.[1]?.toUpperCase()
+// The site's Jira project keys: only these name a ticket, so claude/gracious-goodall-5 is not GOODALL-5.
+export const JIRA_KEYS = ['TI', 'IT', 'SI', 'BS', 'MI', 'MARK', 'MP9', 'SCRUMBAN']
+
+// The first key of a known project in a branch name, upper-cased: feat/ti-4658-acuerdos -> TI-4658.
+export function ticketFrom(branch: string, keys: readonly string[] = JIRA_KEYS): string | undefined {
+  const re = /(?:^|[^A-Za-z0-9])([A-Za-z][A-Za-z0-9]+)-(\d+)(?![0-9])/g
+  for (const m of branch.matchAll(re)) {
+    const key = (m[1] ?? '').toUpperCase()
+    if (keys.includes(key)) return `${key}-${m[2]}`
+  }
+  return undefined
 }
 
 export const ticketUrl = (key: string, base = JIRA_URL) => `${base.replace(/\/+$/, '')}/browse/${key}`

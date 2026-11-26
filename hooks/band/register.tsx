@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { boardHtml, tasksFrom } from './board'
-import { JIRA_URL, flowWarning, ticketFrom, ticketUrl } from './ibancar'
+import { JIRA_KEYS, JIRA_URL, flowWarning, ticketFrom, ticketUrl } from './ibancar'
 import type { Band } from './types'
 import type { Col } from './metrics'
 import {
@@ -403,7 +403,8 @@ export const register: Register = (on, options) => {
             : ''
     const testsColor = b.tests.state === 'pass' ? 'success' : b.tests.state === 'fail' ? 'error' : undefined
     const hasOpen = b.openCallers.length > 0
-    const ticket = ticketFrom(b.branch)
+    const keys = typeof options.jiraKeys === 'string' && options.jiraKeys.trim() !== '' ? options.jiraKeys.split(',').map(k => k.trim().toUpperCase()) : JIRA_KEYS
+    const ticket = ticketFrom(b.branch, keys)
     const warning = flowWarning(b.branch)
     const jira = typeof options.jiraUrl === 'string' && options.jiraUrl.trim() !== '' ? options.jiraUrl.trim() : JIRA_URL
     // Where the cost was, one slot: the ticket the branch names, else a protected branch, else plainly no ticket.

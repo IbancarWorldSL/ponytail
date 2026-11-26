@@ -15,8 +15,8 @@ Para y pregunta ante cualquier duda: una PR es visible para todo el equipo.
 - Rama actual: `git rev-parse --abbrev-ref HEAD`.
 - Si es `develop`, `master`, `main` o `release-(WIP)`, para: el trabajo va en
   una rama propia sacada de `release-(WIP)`.
-- Ticket: la primera clave `[A-Z][A-Z0-9]+-\d+` del nombre de la rama (en
-  mayúsculas). Si no hay, pregunta al usuario por el ticket. Si dice que no
+- Ticket: la primera clave `<PROYECTO>-<número>` del nombre de la rama (en
+  mayúsculas), de los proyectos `TI`, `IT`, `SI`, `BS`, `MI`, `MARK`, `MP9` o `SCRUMBAN`; cualquier otra combinación no es un ticket. Si no hay, pregunta al usuario por el ticket. Si dice que no
   hay ninguno, avisa de que la PR irá sin ticket y continúa solo si lo confirma.
 - Origen: la rama debe salir de `release-(WIP)`, no de `develop`.
   Trae las dos ramas (`git fetch --depth=200 origin develop "release-(WIP)"`
