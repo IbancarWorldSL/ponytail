@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import { boardHtml, tasksFrom } from './board'
+import { JIRA_URL, flowWarning, ticketFrom, ticketUrl } from './ibancar'
 import type { Band } from './types'
 import type { Col } from './metrics'
 import {
@@ -56,6 +57,7 @@ const EMPTY: Band = {
   openCallers: [],
   tests: { state: 'none' },
   details: false,
+  branch: '',
 }
 // The counters of one task: what a new session or /clear starts over.
 const TASK = {
@@ -102,6 +104,12 @@ async function readLevel($: EngineInterface): Promise<string> {
   } catch {
     return 'off'
   }
+}
+
+// The checked-out branch, '' outside a repo; 'HEAD' when detached.
+async function readBranch($: EngineInterface): Promise<string> {
+  const git = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).catch(() => undefined)
+  return git?.exitCode === 0 ? git.stdout.trim() : ''
 }
 
 // The same commands a person types, so ponytail's own skills and hooks stay the only logic.
@@ -209,7 +217,8 @@ async function start($: EngineInterface): Promise<Map<string, string>> {
   const usage = await $.session.usage().catch(() => undefined)
   const csv = usage ? await $.fs.read(ledgerFile(await ledgerDir($), project)).catch(() => '') : ''
   const key = usage ? taskKey(session, usage.startedAt) : ''
-  await update($, band, b => resume({ ...EMPTY, ...b, level, details, project, session, cost: usage?.cost?.usd ?? b.cost }, csv, key))
+  const branch = await readBranch($)
+  await update($, band, b => resume({ ...EMPTY, ...b, level, details, project, session, branch, cost: usage?.cost?.usd ?? b.cost }, csv, key))
   return grep?.exitCode === 0 ? parseDefs(grep.stdout) : new Map()
 }
 
@@ -307,6 +316,8 @@ export const register: Register = (on, options) => {
     const transcript = kept ? saved : await findTranscript($, session)
     const title = await readTitle($, transcript)
     const model = await readModel($, transcript)
+    // A turn can switch or create the branch.
+    const branch = await readBranch($)
 
     // A removed or renamed definition that is not defined again but still called somewhere.
     // shortcut: name match with git grep, so a same-named call in another module counts too.
@@ -344,6 +355,7 @@ export const register: Register = (on, options) => {
         model: model || b.model,
         removed: stillRemoved,
         openCallers: open,
+        branch,
       }
     })
     await record($, b, options).catch(() => $.ui.status('ponytail band: could not write the task ledger'))
@@ -361,8 +373,6 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const startedAt = (await $.session.usage().catch(() => undefined))?.startedAt ?? now
     const reuse = percent(b.reused.length, b.created.length)
-    const avg = b.turns > 0 ? b.spent / b.turns : 0
-    const last = b.turnCosts[b.turnCosts.length - 1]
 
     const setLevel = async (level: string) => {
       await update($, band, x => ({ ...x, level }))
@@ -374,27 +384,39 @@ export const register: Register = (on, options) => {
     }
     const review = () => run($, 'ponytail:ponytail-review')
     const audit = () => run($, 'ponytail:ponytail-audit')
-    const board = () => openBoard($).catch(() => $.ui.toast('ponytail band: could not open the board'))
+    const ticketAudit = () => run($, 'ponytail:ibancar-ticket')
+    const pr = () => run($, 'ponytail:ibancar-pr')
+    const board = () => openBoard($).catch(() => $.ui.toast('ponytail band: no se pudo abrir el tablero'))
     const copy = async () => {
       const done = await $.ui.copy({ text: markdown(snapshot(await load($), startedAt)), surface: e.surface })
-      $.ui.toast(done.isCopied ? 'Task copied as Markdown' : `Copy failed: ${done.reason}`)
+      $.ui.toast(done.isCopied ? 'Tarea copiada en Markdown' : `No se pudo copiar: ${done.reason}`)
     }
 
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Box, Text, Button, Link } = $.ui.resolve(e)
     // bodyColumns counts terminal cells; a graphical surface draws Buttons wider than their cells, so a row sized to it wraps there.
     const width = e.surface === 'terminal' ? e.props.bodyColumns : undefined
     const stack =(mine: NonNullable<typeof below>) => (below ? <Box flexDirection="column">{mine}{below}</Box> : mine)
 
+    // No cost: on a Team plan it is API list price, not a bill, and reads as one.
     const testsText =
       b.tests.state === 'pass'
         ? `✓ ${b.tests.passed ?? ''} tests`
         : b.tests.state === 'fail'
-          ? `✗ ${b.tests.failed ?? ''} failed`
+          ? `✗ ${b.tests.failed ?? ''} fallan`
           : b.tests.state === 'stale'
-            ? 'no test since change'
+            ? 'sin test desde el cambio'
             : ''
     const testsColor = b.tests.state === 'pass' ? 'success' : b.tests.state === 'fail' ? 'error' : undefined
     const hasOpen = b.openCallers.length > 0
+    const ticket = ticketFrom(b.branch)
+    const warning = flowWarning(b.branch)
+    const jira = typeof options.jiraUrl === 'string' && options.jiraUrl.trim() !== '' ? options.jiraUrl.trim() : JIRA_URL
+    const ticketChip = ticket !== undefined && <Link href={ticketUrl(ticket, jira)} label={ticket} />
+    const warningChip = warning !== undefined && <Text color="warning">⚠ {warning}</Text>
+    const ours = [
+      <Button key="ticket-audit" plain label="Auditar ticket" onPress={ticketAudit} />,
+      <Button key="pr" plain label="PR draft" onPress={pr} />,
+    ]
 
     if (!b.details) {
       return stack(
@@ -403,41 +425,40 @@ export const register: Register = (on, options) => {
           <Button key="level" plain onPress={toggle}>
             <Text color={b.level === 'off' ? 'inactive' : 'suggestion'}>●</Text> {b.level}
           </Button>
-          <Text>${b.spent.toFixed(2)}</Text>
-          {last !== undefined && <Text dimColor>last ${last.toFixed(2)}</Text>}
+          {ticketChip}
+          {warningChip}
           <Text dimColor>{elapsed(b.busyMs)}</Text>
-          {reuse !== undefined && <Text>{reuse}% reuse</Text>}
-          {hasOpen && <Text color="warning">⚠ {b.openCallers.length} callers open</Text>}
+          {reuse !== undefined && <Text>{reuse}% reutilizado</Text>}
+          {hasOpen && <Text color="warning">⚠ {b.openCallers.length} llamadas abiertas</Text>}
           {testsText !== '' && (
             <Text color={testsColor} dimColor={b.tests.state === 'stale'}>
               {testsText}
             </Text>
           )}
           <Box flexGrow={1} />
-          <Button key="review" plain label="Review" onPress={review} />
-          <Button key="audit" plain label="Audit" onPress={audit} />
-          <Button key="board" plain label="Board" onPress={board} />
-          <Button key="details" plain label="Details" onPress={toggle} />
+          {ours}
+          <Button key="review" plain label="Revisar" onPress={review} />
+          <Button key="board" plain label="Tablero" onPress={board} />
+          <Button key="details" plain label="Detalles" onPress={toggle} />
         </Box>
       )
     }
 
     // Only columns that say something; callers and tests appear once there is something to report.
     const cols: Col[] = [
-      { key: 'cost', label: 'cost', value: `$${b.spent.toFixed(2)}`, sub: last === undefined ? '' : `last $${last.toFixed(2)} · ⌀ $${avg.toFixed(2)}` },
-      { key: 'tokens', label: 'tokens', value: fmtTokens(totalTokens(b.tokens)), sub: `${b.turns} ${b.turns === 1 ? 'turn' : 'turns'}` },
-      { key: 'time', label: 'agent time', value: elapsed(b.busyMs), sub: b.turns > 0 ? `⌀ ${elapsed(b.busyMs / b.turns)} / turn` : '' },
+      { key: 'tokens', label: 'tokens', value: fmtTokens(totalTokens(b.tokens)), sub: `${b.turns} ${b.turns === 1 ? 'turno' : 'turnos'}` },
+      { key: 'time', label: 'tiempo agente', value: elapsed(b.busyMs), sub: b.turns > 0 ? `⌀ ${elapsed(b.busyMs / b.turns)} / turno` : '' },
     ]
-    if (reuse !== undefined) cols.push({ key: 'reuse', label: 'reuse', value: `${reuse}%`, sub: '' })
+    if (reuse !== undefined) cols.push({ key: 'reuse', label: 'reutilizado', value: `${reuse}%`, sub: '' })
     if (hasOpen) {
-      cols.push({ key: 'callers', label: 'callers', value: `${b.openCallers.length} open`, sub: b.openCallers.slice(0, 2).join(', '), tone: 'warning' })
+      cols.push({ key: 'callers', label: 'llamadas', value: `${b.openCallers.length} abiertas`, sub: b.openCallers.slice(0, 2).join(', '), tone: 'warning' })
     }
     if (b.tests.state !== 'none') {
       cols.push({
         key: 'tests',
         label: 'tests',
-        value: testsLabel(b.tests),
-        sub: b.tests.state === 'pass' ? 'after last change' : b.tests.state === 'fail' ? 'last run' : 'code changed since',
+        value: testsText.replace(/^[✓✗] /, ''),
+        sub: b.tests.state === 'pass' ? 'tras el último cambio' : b.tests.state === 'fail' ? 'última ejecución' : 'código cambiado después',
         tone: b.tests.state === 'pass' ? 'success' : b.tests.state === 'fail' ? 'error' : undefined,
       })
     }
@@ -466,7 +487,7 @@ export const register: Register = (on, options) => {
     // Text glyphs make broken lines in the desktop's proportional font; an SVG draws real ones.
     if (e.surface === 'desktop') {
       const { Svg } = $.ui.resolve(e)
-      metrics = <Svg source={metricsSvg(cols, b.turnCosts)} alt={cols.map(c => `${c.label} ${c.value}`).join(', ')} />
+      metrics = <Svg source={metricsSvg(cols, [])} alt={cols.map(c => `${c.label} ${c.value}`).join(', ')} />
     }
 
     return stack(
@@ -481,12 +502,15 @@ export const register: Register = (on, options) => {
               onPress={() => setLevel(level)}
             />
           ))}
+          {ticketChip}
+          {warningChip}
           <Box flexGrow={1} />
-          <Button key="copy" plain label="Copy" onPress={copy} />
-          <Button key="review" plain label="Review" onPress={review} />
-          <Button key="audit" plain label="Audit" onPress={audit} />
-          <Button key="board" plain label="Board" onPress={board} />
-          <Button key="details" plain label="Compact" onPress={toggle} />
+          {ours}
+          <Button key="copy" plain label="Copiar" onPress={copy} />
+          <Button key="review" plain label="Revisar" onPress={review} />
+          <Button key="audit" plain label="Auditar repo" onPress={audit} />
+          <Button key="board" plain label="Tablero" onPress={board} />
+          <Button key="details" plain label="Compacto" onPress={toggle} />
         </Box>
         {metrics}
       </Box>

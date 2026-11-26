@@ -35,6 +35,12 @@
       "title": "Send task names",
       "default": true,
       "description": "Send each task's name (its name in the Claude Code sidebar, or its first prompt) to the webhook. Off: the board shows the task without a name."
+    },
+    "jiraUrl": {
+      "type": "string",
+      "title": "Jira",
+      "description": "Base URL of the Jira site the branch ticket (TI-XXXX) links to.",
+      "default": "https://ibancar.atlassian.net"
     }
   }
 }
