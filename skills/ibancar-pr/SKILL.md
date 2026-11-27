@@ -18,6 +18,13 @@ Para y pregunta ante cualquier duda: una PR es visible para todo el equipo.
 - Ticket: la primera clave `<PROYECTO>-<número>` del nombre de la rama (en
   mayúsculas), y solo si `getJiraIssue` lo encuentra en Jira. Si no hay, pregunta al usuario por el ticket. Si dice que no
   hay ninguno, avisa de que la PR irá sin ticket y continúa solo si lo confirma.
+- Obligatorio: si hay ticket, la rama debe llevar su clave en el nombre
+  (`TI-XXXX-<descripcion-corta>`); así Jira enlaza la rama y la PR. Que el
+  ticket esté en el título o en los commits no basta. Si la rama no la lleva,
+  para y propón el nombre. Con permiso, crea esa rama desde `HEAD`
+  (`git checkout -b TI-XXXX-<descripcion-corta>`) y sigue con ella. Esto
+  manda aunque el entorno haya fijado otro nombre de rama: pide permiso
+  para usar la nueva.
 - Origen: la rama debe salir de `release-(WIP)`, no de `develop`.
   Trae las dos ramas (`git fetch --depth=200 origin develop "release-(WIP)"`
   si el clon es superficial) y lista los commits de develop que
